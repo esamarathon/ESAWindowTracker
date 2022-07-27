@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.2.32630.192
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ESAWindowTracker", "ESAWindowTracker\ESAWindowTracker.csproj", "{5F63DE6B-203C-4320-901D-2B5FE8B5B7F8}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5F63DE6B-203C-4320-901D-2B5FE8B5B7F8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5F63DE6B-203C-4320-901D-2B5FE8B5B7F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5F63DE6B-203C-4320-901D-2B5FE8B5B7F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5F63DE6B-203C-4320-901D-2B5FE8B5B7F8}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {E9D7A93A-BC96-42A7-A552-57C62B4FE319}
+	EndGlobalSection
+EndGlobal

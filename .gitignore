@@ -1,0 +1,4 @@
+.vs/
+*.sqlite
+*.user
+client_secret*.json
