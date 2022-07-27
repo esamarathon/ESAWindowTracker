@@ -10,51 +10,88 @@ using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Debug;
+using Microsoft.Extensions.Logging.Console;
 
 namespace ESAWindowTracker
 {
-    /// <summary>
-    /// Interaction logic for App.xaml
-    /// </summary>
     public partial class App : Application
     {
-        public IServiceProvider ServiceProvider { get; set; }
-        public IConfiguration Configuration { get; set; }
+        private readonly IHost host;
+
+        new public static App Current => (App)Application.Current;
 
         public App()
         {
-            var builder = new ConfigurationBuilder()
-                .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
-                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
-
+            host = new HostBuilder()
+                .ConfigureAppConfiguration((context, builder) =>
+                {
+                    builder.SetBasePath(AppDomain.CurrentDomain.BaseDirectory);
+                    builder.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
 #if DEBUG
-            builder.AddUserSecrets<App>();
+                    builder.AddUserSecrets<App>();
 #endif
+                }).ConfigureServices((context, services) =>
+                {
+                    ConfigureServices(context.Configuration, services);
+                })
+                .ConfigureLogging(logging =>
+                {
+                    logging.ClearProviders();
+                    logging.AddConsole();
+#if DEBUG
+                    logging.AddDebug();
+#else
+                    logging.AddEventLog();
+#endif
+                })
+               .Build();
 
-            Configuration = builder.Build();
             WriteConfig();
 
-            var serviceCollection = new ServiceCollection();
-            ConfigureServices(serviceCollection);
-
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            ServiceProvider = serviceCollection.BuildServiceProvider();
         }
 
-        private void ConfigureServices(ServiceCollection services)
+        private void ConfigureServices(IConfiguration configuration, IServiceCollection services)
         {
-            services.AddTransient<MainWindow>();
+            services.AddLogging();
+
+            services.AddOptions();
+            services.Configure<Config>(configuration);
+            services.Configure<RabbitConfig>(configuration.GetSection("RabbitConfig"));
+
+            RabbitService.Register(services);
+            WindowTracker.Register(services);
+
+            services.AddSingleton<MainWindow>();
         }
 
-        protected override void OnStartup(StartupEventArgs e)
+        protected override async void OnStartup(StartupEventArgs e)
         {
-            ServiceProvider.GetRequiredService<MainWindow>();
+            await host.StartAsync();
+            host.Services.GetRequiredService<MainWindow>();
+            base.OnStartup(e);
+        }
+
+        protected override async void OnExit(ExitEventArgs e)
+        {
+            using (host)
+            {
+                await host.StopAsync(TimeSpan.FromSeconds(5));
+            }
+
+            base.OnExit(e);
         }
 
         public void WriteConfig(Config? config = null)
         {
-            if (config == null)
-                config = Configuration.Get<Config>() ?? new Config();
+            if (config == null) {
+                using var scope = host.Services.CreateScope();
+                config = scope.ServiceProvider.GetRequiredService<IOptionsSnapshot<Config>>().Value;
+            }
 
             var jsonWriteOptions = new JsonSerializerOptions()
             {

@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -21,9 +23,31 @@ namespace ESAWindowTracker
     /// </summary>
     public partial class MainWindow : Window
     {
-        public MainWindow()
+        private readonly IOptionsMonitor<Config> options;
+        private readonly RabbitMessageSender rabbitMessageSender;
+
+        public MainWindow(IOptionsMonitor<Config> options, RabbitMessageSender rabbitMessageSender)
         {
             InitializeComponent();
+
+            this.options = options;
+            this.rabbitMessageSender = rabbitMessageSender;
+
+            rabbitMessageSender.StatusChanged += RabbitMessageSender_StatusChanged;
+            RabbitStatusLabel.Content = rabbitMessageSender.Status;
+
+            options.OnChange(OnConfigChange);
+            OnConfigChange(options.CurrentValue, "");
+        }
+
+        private void OnConfigChange(Config cfg, string _)
+        {
+            IDField.Content = $"This is PC {cfg.PCID} at {cfg.EventShort}";
+        }
+
+        private void RabbitMessageSender_StatusChanged(string status)
+        {
+            RabbitStatusLabel.Content = status;
         }
 
         private void Show_Executed(object sender, ExecutedRoutedEventArgs e)

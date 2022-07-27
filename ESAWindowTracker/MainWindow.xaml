@@ -15,6 +15,13 @@
             />
     </Window.CommandBindings>
     <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition></ColumnDefinition>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="auto"></RowDefinition>
+            <RowDefinition></RowDefinition>
+        </Grid.RowDefinitions>
         <tb:TaskbarIcon x:Name="ESAWindowTracker" ToolTipText="ESAWindowTracker" IconSource="/NetDrives.ico" DoubleClickCommand="{x:Static local:Commands.Show}">
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu>
@@ -24,5 +31,7 @@
                 </ContextMenu>
             </tb:TaskbarIcon.ContextMenu>
         </tb:TaskbarIcon>
+        <Label Name="IDField" Grid.Row="0" Grid.Column="0"></Label>
+        <Label Name="RabbitStatusLabel" Grid.Row="1" Grid.Column="0"></Label>
     </Grid>
 </Window>
