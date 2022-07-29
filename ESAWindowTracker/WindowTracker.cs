@@ -13,30 +13,20 @@ using Microsoft.Extensions.Options;
 
 namespace ESAWindowTracker
 {
-    internal class WindowTracker : IHostedService, IDisposable
+    internal class WindowTracker
     {
         public static void Register(IServiceCollection services)
         {
-            services.AddHostedService<WindowTracker>();
+            services.AddTransient<WindowTracker>();
         }
 
         private readonly ILogger<WindowTracker> logger;
-        private readonly IOptionsMonitor<Config> options;
-        private readonly RabbitMessageSender msgSender;
-        private Timer? timer = null;
+        private readonly IOptionsSnapshot<Config> options;
 
-        public WindowTracker(ILogger<WindowTracker> logger, IOptionsMonitor<Config> options, RabbitMessageSender msgSender)
+        public WindowTracker(ILogger<WindowTracker> logger, IOptionsSnapshot<Config> options)
         {
             this.logger = logger;
             this.options = options;
-            this.msgSender = msgSender;
-        }
-
-        public Task StartAsync(CancellationToken stoppingToken)
-        {
-            logger.LogInformation("WindowTracker Service running.");
-            timer = new Timer(DoWork, null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
-            return Task.CompletedTask;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -59,19 +49,19 @@ namespace ESAWindowTracker
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
 
-        private void DoWork(object? _)
+        public ResponseMsg? GetCurrentInfo()
         {
             var hwnd = GetForegroundWindow();
             if (hwnd == IntPtr.Zero)
             {
                 logger.LogError("Failed getting foreground window.");
-                return;
+                return null;
             }
 
             if (!GetClientRect(hwnd, out RECT clientrect))
             {
                 logger.LogError("Failed getting client rect.");
-                return;
+                return null;
             }
 
             Point top_left = new Point(clientrect.Left, clientrect.Top);
@@ -80,28 +70,28 @@ namespace ESAWindowTracker
             if (!ClientToScreen(hwnd, ref top_left))
             {
                 logger.LogError("Failed converting client to screen.");
-                return;
+                return null;
             }
             if (!ClientToScreen(hwnd, ref bottom_right))
             {
                 logger.LogError("Failed converting client to screen.");
-                return;
+                return null;
             }
 
             StringBuilder titleBuilder = new StringBuilder(GetWindowTextLength(hwnd) + 1);
             if (GetWindowText(hwnd, titleBuilder, titleBuilder.Capacity) <= 0)
             {
                 logger.LogError("Failed getting Window Title.");
-                return;
+                return null;
             }
 
 #if DEBUG
             logger.LogInformation($"Rect for {titleBuilder}: {top_left.X},{top_left.Y},{bottom_right.X},{bottom_right.Y}");
 #endif
 
-            var opts = options.CurrentValue;
+            var opts = options.Value;
 
-            RabbitMessage msg = new RabbitMessage
+            return new ResponseMsg
             {
                 PCID = opts.PCID,
                 Eventshort = opts.EventShort,
@@ -114,20 +104,6 @@ namespace ESAWindowTracker
                 WindowRight = bottom_right.X,
                 WindowBottom = bottom_right.Y
             };
-
-            msgSender.PostMesage(msg);
-        }
-
-        public Task StopAsync(CancellationToken stoppingToken)
-        {
-            logger.LogInformation("WindowTracker Service is stopping.");
-            timer?.Change(Timeout.Infinite, 0);
-            return Task.CompletedTask;
-        }
-
-        public void Dispose()
-        {
-            timer?.Dispose();
         }
     }
 }

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Security.Authentication;
@@ -12,41 +13,49 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 using RabbitMQ.Client;
-using System.Text.Json;
+using RabbitMQ.Client.Events;
 
 namespace ESAWindowTracker
 {
-    public class RabbitMessage
+    public class ResponseMsg
     {
         [JsonPropertyName("event_short")]
-        public string? Eventshort { get; set; }
+        public string Eventshort { get; set; } = "";
 
         [JsonPropertyName("pc_id")]
-        public string? PCID { get; set; }
+        public string PCID { get; set; } = "";
 
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         [JsonPropertyName("window_title")]
         public string? WindowTitle { get; set; }
 
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         [JsonPropertyName("window_left")]
-        public int WindowLeft { get; set; }
+        public int? WindowLeft { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         [JsonPropertyName("window_right")]
-        public int WindowRight { get; set; }
+        public int? WindowRight { get; set; }
 
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         [JsonPropertyName("window_top")]
-        public int WindowTop { get; set; }
+        public int? WindowTop { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         [JsonPropertyName("window_bottom")]
-        public int WindowBottom { get; set; }
+        public int? WindowBottom { get; set; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        [JsonPropertyName("error")]
+        public string? Error { get; set; }
     }
 
-    public class RabbitMessageSender
+    public class RequestMsg
     {
-        public event Action<RabbitMessage>? OnRabbitMessage;
+        [JsonPropertyName("method")]
+        public string Method { get; set; } = "";
+    }
 
-        public void PostMesage(RabbitMessage message)
-        {
-            OnRabbitMessage?.Invoke(message);
-        }
-
+    public class RabbitStatus
+    {
         private string status = "";
         public string Status
         {
@@ -64,30 +73,30 @@ namespace ESAWindowTracker
     {
         public static void Register(IServiceCollection services)
         {
-            services.AddSingleton<RabbitMessageSender>();
+            services.AddSingleton<RabbitStatus>();
             services.AddHostedService<RabbitService>();
         }
 
         private readonly ILogger logger;
         private readonly IOptionsMonitor<Config> options;
-        private readonly RabbitMessageSender msg_sender;
+        private readonly IServiceProvider services;
+        private readonly RabbitStatus rabbitStatus;
 
         private IConnection? mqCon;
         private IModel? channel;
 
-        public RabbitService(ILogger<RabbitService> logger, IOptionsMonitor<Config> options, RabbitMessageSender msg_sender)
+        public RabbitService(ILogger<RabbitService> logger, IOptionsMonitor<Config> options, IServiceProvider services, RabbitStatus rabbitStatus)
         {
             this.logger = logger;
             this.options = options;
-            this.msg_sender = msg_sender;
+            this.services = services;
+            this.rabbitStatus = rabbitStatus;
         }
 
         private Task CloseAsync(CancellationToken cancellationToken)
         {
             return Task.Run(() =>
             {
-                msg_sender.OnRabbitMessage -= OnRabbitMessage;
-
                 if (channel != null)
                 {
                     channel.Close();
@@ -120,7 +129,7 @@ namespace ESAWindowTracker
                 AutomaticRecoveryEnabled = true,
                 NetworkRecoveryInterval = TimeSpan.FromSeconds(10),
 
-                DispatchConsumersAsync = true
+                DispatchConsumersAsync = false
             };
 
             factory.Ssl.Enabled = opts.Tls;
@@ -145,11 +154,14 @@ namespace ESAWindowTracker
             channel = mqCon.CreateModel();
             channel.BasicQos(0, 1, false);
 
-            channel.ExchangeDeclare("cg", ExchangeType.Topic, true, true);
+            var opts = options.CurrentValue;
+            rpcQueue = channel.QueueDeclare($"windowtracker-{opts.EventShort}-{opts.PCID}-rpc", false, false, true);
 
             logger.LogInformation("Connected to MQ service at {0}.", mqCon.Endpoint.HostName);
-            msg_sender.Status = $"Connected to MQ service at {mqCon.Endpoint.HostName}.";
+            rabbitStatus.Status = $"Connected to MQ service at {mqCon.Endpoint.HostName}.";
         }
+
+        private QueueDeclareOk? rpcQueue;
 
         private async Task SetupRabbitConsumers(CancellationToken cancellationToken)
         {
@@ -158,53 +170,102 @@ namespace ESAWindowTracker
                 await Task.Run(() =>
                 {
                     InitRabbitMQ();
-                }, cancellationToken);
 
-                msg_sender.OnRabbitMessage += OnRabbitMessage;
+                    if (channel == null)
+                        throw new Exception("No channel after init!");
+                    if (rpcQueue == null)
+                        throw new Exception("No queues after init!");
+
+                    var sceneChangeConsumer = new EventingBasicConsumer(channel);
+                    sceneChangeConsumer.Received += (_, args) => ReceivedRPC(args, cancellationToken);
+                    channel.BasicConsume(rpcQueue.QueueName, false, sceneChangeConsumer);
+                }, cancellationToken);
 
                 logger.LogInformation("Rabbit up and running.");
             }
             catch (Exception e)
             {
                 logger.LogWarning($"Failed establishing Rabbit connection: {e.Message}");
-                msg_sender.Status = $"Failed establishing Rabbit connection: {e.Message}";
+                rabbitStatus.Status = $"Failed establishing Rabbit connection: {e.Message}";
+            }
+        }
+
+        private void ReceivedRPC(BasicDeliverEventArgs args, CancellationToken cancellationToken)
+        {
+            if (channel == null)
+                return;
+
+            logger.LogInformation("Got RPC Request");
+
+            if (!args.BasicProperties.IsReplyToPresent())
+            {
+                logger.LogError("No ReplyTo present");
+                channel.BasicNack(args.DeliveryTag, false, false);
+                return;
+            }
+
+            try
+            {
+                var req = Encoding.UTF8.GetString(args.Body.ToArray());
+                var reqMsg = JsonSerializer.Deserialize<RequestMsg>(req);
+
+                if (reqMsg?.Method?.ToLower() != "get_info")
+                    throw new Exception($"Invalid request: {reqMsg}");
+
+                using var scope = services.CreateScope();
+                var windowTracker = scope.ServiceProvider.GetRequiredService<WindowTracker>();
+
+                ResponseMsg? msg = windowTracker.GetCurrentInfo();
+                if (msg == null)
+                    throw new Exception("Failed getting Window Info.");
+
+                var cfg = options.CurrentValue;
+                string msg_json = JsonSerializer.Serialize(msg);
+
+                IBasicProperties props = channel.CreateBasicProperties();
+                props.CorrelationId = args.BasicProperties.CorrelationId;
+                props.ContentType = "application/json";
+                props.ContentEncoding = "UTF-8";
+
+                channel.BasicPublish(
+                    "",
+                    args.BasicProperties.ReplyTo,
+                    props,
+                    Encoding.UTF8.GetBytes(msg_json));
+                channel.BasicAck(args.DeliveryTag, false);
+
+                logger.LogInformation("RPC Reply Success");
+            }
+            catch(Exception e)
+            {
+                logger.LogError(e, "RPC Request failed");
+
+                var opts = options.CurrentValue;
+                string msg_json = JsonSerializer.Serialize(new ResponseMsg
+                {
+                    Eventshort = opts.EventShort,
+                    PCID = opts.PCID,
+
+                    Error = e.Message
+                });
+
+                IBasicProperties props = channel.CreateBasicProperties();
+                props.CorrelationId = args.BasicProperties.CorrelationId;
+                props.ContentType = "application/json";
+                props.ContentEncoding = "UTF-8";
+
+                channel.BasicPublish(
+                    "",
+                    args.BasicProperties.ReplyTo,
+                    props,
+                    Encoding.UTF8.GetBytes(msg_json));
+                channel.BasicNack(args.DeliveryTag, false, false);
+
+                logger.LogInformation("Error response sent.");
             }
         }
 
         private readonly SemaphoreSlim rabbitLock = new SemaphoreSlim(1);
-
-        private async void OnRabbitMessage(RabbitMessage msg)
-        {
-            if (await rabbitLock.WaitAsync(10000))
-            {
-                try
-                {
-                    if (channel == null)
-                        throw new Exception("No channel to send message to.");
-
-                    var cfg = options.CurrentValue;
-                    string msg_json = JsonSerializer.Serialize(msg);
-
-                    await Task.Run(() =>
-                    {
-                        channel.BasicPublish(
-                            "cg",
-                            $"{cfg.EventShort}.{cfg.PCID}.window_info_changed",
-                            null,
-                            Encoding.UTF8.GetBytes(msg_json));
-                    });
-                }
-                catch (Exception e)
-                {
-                    logger.LogError(e, "Failed sending rabbit message.");
-                    msg_sender.Status = $"Failed sending rabbit message: {e.Message}";
-                }
-                finally
-                {
-                    rabbitLock.Release();
-                }
-            }
-        }
 
         private async void OnOptionsChanged(Config opts)
         {
@@ -225,7 +286,7 @@ namespace ESAWindowTracker
                 catch (Exception e)
                 {
                     logger.LogError(e, "Failed connecting to Rabbit.");
-                    msg_sender.Status = $"Failed connecting to Rabbit: {e.Message}";
+                    rabbitStatus.Status = $"Failed connecting to Rabbit: {e.Message}";
                 }
                 finally
                 {
@@ -246,7 +307,7 @@ namespace ESAWindowTracker
 
         public async Task StartAsync(CancellationToken cancellationToken)
         {
-            msg_sender.Status = "Starting up...";
+            rabbitStatus.Status = "Starting up...";
 
             try
             {
@@ -265,7 +326,7 @@ namespace ESAWindowTracker
         public async Task StopAsync(CancellationToken cancellationToken)
         {
             logger.LogInformation("Stopping Rabbit Listener.");
-            msg_sender.Status = "Stopping...";
+            rabbitStatus.Status = "Stopping...";
 
             if (optionsChangeListener != null)
             {
@@ -276,7 +337,7 @@ namespace ESAWindowTracker
             await CloseAsync(cancellationToken);
 
             logger.LogInformation("Stopped Rabbit Listener.");
-            msg_sender.Status = "Stopped.";
+            rabbitStatus.Status = "Stopped.";
         }
     }
 }

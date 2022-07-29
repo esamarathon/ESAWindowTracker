@@ -24,9 +24,9 @@ namespace ESAWindowTracker
     public partial class MainWindow : Window
     {
         private readonly IOptionsMonitor<Config> options;
-        private readonly RabbitMessageSender rabbitMessageSender;
+        private readonly RabbitStatus rabbitMessageSender;
 
-        public MainWindow(IOptionsMonitor<Config> options, RabbitMessageSender rabbitMessageSender)
+        public MainWindow(IOptionsMonitor<Config> options, RabbitStatus rabbitMessageSender)
         {
             InitializeComponent();
 
